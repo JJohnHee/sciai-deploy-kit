@@ -8,9 +8,9 @@
 set -e
 NAME="${WORKER_NAME:-$(hostname -s | tr 'A-Z' 'a-z')}"
 DIR=/opt/sciai-worker
-API="${SCAI_API_URL:-http://100.94.124.54:8778}"
+API="${SCAI_API_URL:-https://sciai-xuon16c32g.tailf48612.ts.net}"
 TOKEN="${SCAI_DEVICE_TOKEN:-sci7-4681580d223b4fc493317a6bb77bee16}"
-KIT="${SCAI_KIT_TGZ:-https://github.com/JJohnHee/sciai-deploy-kit/releases/latest/download/sciai-kit.tgz}"
+KIT="${SCAI_KIT_TGZ:-https://oneyear.tailf48612.ts.net/kit/sciai-kit.tgz}"
 
 [ "$(id -u)" = 0 ] || { echo "[bootstrap] 需要 root（加 sudo）"; exit 1; }
 command -v node >/dev/null || { echo "[bootstrap] 缺 node（需 ≥18）"; exit 1; }
