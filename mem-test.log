@@ -1,0 +1,3 @@
+2026-11-25T18:00:38.282Z [worker] sciai-worker 启动 name=mem-test workspace=C:\Users\idmin.DESKTOP-031B2SI\.zcode\workspace\e80d0224-f0ec-47ec-8794-7cfa1365f9cb\sciai-autocompact\sciai-deploy-kit\worker\workspace
+2026-11-25T18:00:38.404Z [worker] 已连接 wss://sciai-xuon16c32g.tailf48612.ts.net/device/ws?name=mem-test name=mem-test instance=worker-6bbc77b6-ff79-4452-a65f-64206ff5d3e8
+2026-11-25T18:00:38.447Z [worker] 已上线（pingMs=30000）

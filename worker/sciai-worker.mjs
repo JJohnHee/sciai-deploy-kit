@@ -3,12 +3,61 @@
 // 协议：ClawsOS /device/ws（hello/hello_ack/presence/turn.spawn/turn_stream/turn_exit）
 // 必需 env：CLAWSGO_API_URL（如 http://100.94.124.54:8778）、CLAWSGO_DEVICE_TOKEN
 // 可选 env：WORKER_NAME（设备名，默认 hostname）、CLAWSGO_WORKSPACE_ROOT（默认 ./workspace）
+// 自动更新：每 6h 对照 ${SCIAI_KIT_BASE}/worker-ver.json，校验 version + SHA-256 后原子自替换
 import { spawn, execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, unlinkSync, renameSync } from 'node:fs';
 import { tmpdir, hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import crypto from 'node:crypto';
 import WebSocket from 'ws';
+
+// ── 更新校验模块（内联，保证自替换单文件自洽；与 worker-update.mjs 同源）──
+function parseUpdateManifest(text, currentVersion) {
+  let manifest;
+  try { manifest = JSON.parse(text); } catch (error) { throw new Error(`更新清单不是有效 JSON: ${error.message}`); }
+  if (!Number.isInteger(manifest.version) || manifest.version <= 0) throw new Error('更新清单 version 无效');
+  if (typeof manifest.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(manifest.sha256)) throw new Error('更新清单 sha256 无效');
+  return { version: manifest.version, sha256: manifest.sha256.toLowerCase(), currentVersion };
+}
+function swapVerifiedUpdate(bytes, manifest, selfPath) {
+  const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+  if (actual !== manifest.sha256) throw new Error(`更新包 SHA-256 不匹配: expected=${manifest.sha256} actual=${actual}`);
+  const temporary = `${selfPath}.${process.pid}.new`;
+  try {
+    writeFileSync(temporary, bytes, { mode: 0o600 });
+    renameSync(temporary, selfPath);
+  } catch (error) {
+    try { unlinkSync(temporary); } catch {}
+    throw error;
+  }
+  return { version: manifest.version, sha256: actual };
+}
+
+const WORKER_VERSION = 3;
+const KIT_BASE = (process.env.SCIAI_KIT_BASE || 'https://oneyear.tailf48612.ts.net/kit').replace(/\/$/, '');
+const SELF_PATH = new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+// 团队标签（x-team-id）：黑五类组/科研组等分组隔离，派单按 team 路由到对应设备
+const TEAM = process.env.SCAI_TEAM || '';
+
+// ── 自动更新（sciai 专属；zcode 节点不走此逻辑，冻结版本） ──
+async function checkUpdate(manual) {
+  try {
+    const manifestResponse = await fetch(KIT_BASE + '/worker-ver.json', { signal: AbortSignal.timeout(15000) });
+    if (!manifestResponse.ok) throw new Error(`清单 HTTP ${manifestResponse.status}`);
+    const manifest = parseUpdateManifest(await manifestResponse.text(), WORKER_VERSION);
+    if (manifest.version > WORKER_VERSION) {
+      log(`[update] 服务器有新版 v${manifest.version}（本机 v${WORKER_VERSION}），下载并校验…`);
+      const codeResponse = await fetch(KIT_BASE + '/sciai-worker.mjs', { signal: AbortSignal.timeout(60000) });
+      if (!codeResponse.ok) throw new Error(`更新包 HTTP ${codeResponse.status}`);
+      const bytes = Buffer.from(await codeResponse.arrayBuffer());
+      const applied = swapVerifiedUpdate(bytes, manifest, SELF_PATH);
+      log(`[update] 已替换为 v${applied.version} sha256=${applied.sha256}，退出重启…`);
+      process.exit(0);
+    } else if (manual) log(`[update] 已是最新 v${WORKER_VERSION}`);
+  } catch (e) {
+    log('[update][warn] 更新失败，保留当前版本: ' + e.message);
+  }
+}
 
 const API = (process.env.CLAWSGO_API_URL || 'http://100.94.124.54:8778').replace(/\/$/, '');
 const TOKEN = process.env.CLAWSGO_DEVICE_TOKEN || process.env.CLAWSOS_DEVICE_TOKEN || '';
@@ -57,7 +106,7 @@ function spawnTurn(params, send) {
 // ── WS 连接（自动重连 + 心跳） ──
 let backoff = 1000;
 function connect() {
-  const ws = new WebSocket(WS_URL, { headers: { authorization: 'Bearer ' + TOKEN } });
+  const ws = new WebSocket(WS_URL, { headers: { authorization: 'Bearer ' + TOKEN, ...(TEAM ? { 'x-team-id': TEAM } : {}) } });
   const send = f => { try { ws.send(JSON.stringify(f)); } catch {} };
   ws.on('open', () => {
     log('[worker] 已连接', WS_URL, 'name=' + NAME, 'instance=' + instance);
@@ -80,5 +129,8 @@ function connect() {
   ws.on('error', () => {});
 }
 connect();
+// ── 自动更新调度：启动 60s 后首查，之后每 6h ──
+setTimeout(() => checkUpdate(true), 60000);
+setInterval(() => checkUpdate(false), 6 * 3600 * 1000);
 process.on('SIGINT', () => { for (const t of turns.values()) { try { t.child.kill(); } catch {} } process.exit(0); });
-log('[worker] sciai-worker 启动 name=' + NAME + ' workspace=' + WS_ROOT);
+log('[worker] sciai-worker v' + WORKER_VERSION + ' 启动 name=' + NAME + ' workspace=' + WS_ROOT);

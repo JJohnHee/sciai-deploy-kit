@@ -1,0 +1,6 @@
+2026-11-26T05:06:19.717Z [worker] sciai-worker v3 启动 name=team-test workspace=C:\Users\idmin.DESKTOP-031B2SI\.zcode\workspace\e80d0224-f0ec-47ec-8794-7cfa1365f9cb\sciai-autocompact\sciai-deploy-kit\worker\ws-teamtest
+2026-11-26T05:06:19.835Z [worker] 已连接 wss://sciai-xuon16c32g.tailf48612.ts.net/device/ws?name=team-test name=team-test instance=worker-6bbc77b6-ff79-4452-a65f-64206ff5d3e8
+2026-11-26T05:06:19.875Z [worker] 已上线（pingMs=30000）
+2026-11-26T05:06:58.630Z [worker] 收到 turn fd14bf98 cwd=C:\clawsos\server\workspace
+2026-11-26T05:07:19.867Z [update][warn] 更新失败，保留当前版本: 清单 HTTP 404
+2026-11-26T05:11:54.103Z [worker] 收到 turn ee87adce cwd=C:\clawsos\server\workspace

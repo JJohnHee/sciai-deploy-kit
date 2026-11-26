@@ -3,13 +3,14 @@
 # 用法（新云机/任意 Tailscale 节点，root 执行）：
 #   curl -fsSL https://github.com/JJohnHee/sciai-deploy-kit/raw/main/bootstrap.sh | bash
 # 可选环境变量：
-#   WORKER_NAME=自定义设备名   SCAI_DEVICE_TOKEN=引导令牌（缺省用包内 7 天令牌）
+#   WORKER_NAME=自定义设备名   SCAI_DEVICE_TOKEN=引导令牌（必需，不再提供包内缺省令牌）
 #   SCAI_API_URL=设备池地址    SCAI_WORKSPACE_ROOT=工作区路径（默认 /opt/sciai-worker/workspace）
 set -e
+[ -n "$SCAI_DEVICE_TOKEN" ] || { echo "[bootstrap] 缺少必需环境变量 SCAI_DEVICE_TOKEN"; exit 1; }
 NAME="${WORKER_NAME:-$(hostname -s | tr 'A-Z' 'a-z')}"
 DIR=/opt/sciai-worker
 API="${SCAI_API_URL:-https://sciai-xuon16c32g.tailf48612.ts.net}"
-TOKEN="${SCAI_DEVICE_TOKEN:-sci7-4681580d223b4fc493317a6bb77bee16}"
+TOKEN="$SCAI_DEVICE_TOKEN"
 KIT="${SCAI_KIT_TGZ:-https://oneyear.tailf48612.ts.net/kit/sciai-kit.tgz}"
 
 [ "$(id -u)" = 0 ] || { echo "[bootstrap] 需要 root（加 sudo）"; exit 1; }
@@ -25,16 +26,24 @@ fi
 WS_ROOT="${SCAI_WORKSPACE_ROOT:-$DIR/workspace}"
 mkdir -p "$WS_ROOT"
 
+ENV_FILE=/etc/sciai-worker.env
+umask 077
+cat > "$ENV_FILE" <<EOF
+WORKER_NAME=$NAME
+CLAWSGO_API_URL=$API
+CLAWSGO_DEVICE_TOKEN=$TOKEN
+CLAWSGO_WORKSPACE_ROOT=$WS_ROOT
+EOF
+chmod 600 "$ENV_FILE"
+umask 022
+
 cat > /etc/systemd/system/sciai-worker.service <<EOF
 [Unit]
 Description=SCAI Worker ($NAME · CD5 设备池)
 After=network-online.target
 [Service]
 WorkingDirectory=$DIR
-Environment=WORKER_NAME=$NAME
-Environment=CLAWSGO_API_URL=$API
-Environment=CLAWSGO_DEVICE_TOKEN=$TOKEN
-Environment=CLAWSGO_WORKSPACE_ROOT=$WS_ROOT
+EnvironmentFile=-$ENV_FILE
 ExecStart=$(command -v node) $DIR/sciai-worker.mjs
 Restart=always
 RestartSec=3

@@ -1,22 +1,36 @@
-# SCAI 一键引导（Windows 云电脑版）：下载执行包 → 计划任务常驻 → 公网连回 CD5 设备池
-# 用法（管理员 PowerShell）：
-#   iwr https://oneyear.tailf48612.ts.net/kit/bootstrap.ps1 -UseBasicParsing | iex
-# 前置：已装 Node.js（node -v 可用即可）；无需 Tailscale/无需入网（公网直连）
+# SCAI 一键引导（Windows 云电脑版 v2）：下载执行包 → 计划任务常驻（守护循环）→ 公网连回 CD5 设备池
+# 用法：$env:SCAI_DEVICE_TOKEN='<引导令牌>'; iwr <kit>/bootstrap.ps1 -UseBasicParsing | iex
 $ErrorActionPreference = 'Continue'
+if (-not $env:SCAI_DEVICE_TOKEN) { Write-Error '[bootstrap] 缺少必需环境变量 SCAI_DEVICE_TOKEN'; exit 1 }
 
 $API  = if ($env:SCAI_API_URL)  { $env:SCAI_API_URL }  else { 'https://sciai-xuon16c32g.tailf48612.ts.net' }
-$TOKEN = if ($env:SCAI_DEVICE_TOKEN) { $env:SCAI_DEVICE_TOKEN } else { 'sci7-4681580d223b4fc493317a6bb77bee16' }
+$TOKEN = $env:SCAI_DEVICE_TOKEN
 $NAME = if ($env:WORKER_NAME) { $env:WORKER_NAME } else { $env:COMPUTERNAME.ToLower() }
 $DIR  = 'C:\sciai-worker'
-$KIT  = if ($env:SCAI_KIT_TGZ) { $env:SCAI_KIT_TGZ } else { 'https://oneyear.tailf48612.ts.net/kit/sciai-kit.tgz' }
+$KB   = if ($env:SCAI_KIT_BASE) { $env:SCAI_KIT_BASE } else { 'https://oneyear.tailf48612.ts.net/kit' }
+$KIT  = if ($env:SCAI_KIT_TGZ) { $env:SCAI_KIT_TGZ } else { "$KB/sciai-kit.tgz" }
 
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Write-Host '[bootstrap] 缺 Node.js——先装：https://nodejs.org 任意 ≥18 LTS'; exit 1
+New-Item -ItemType Directory -Force -Path $DIR | Out-Null
+
+# ── Node 运行时：有 node(≥18) 用系统的，缺/旧则装 kit 内 node22 ──
+$nodeBin = 'node'
+$nv = $null
+try { $nv = (& node -v) 2>$null } catch {}
+if (-not $nv) {
+  Write-Host '[bootstrap] 缺 Node.js，自动安装 kit 内 node22…'
+  if (-not (Test-Path "$DIR\node22\node.exe")) {
+    Invoke-WebRequest -Uri "$KB/node-win-x64.zip" -OutFile "$env:TEMP\node22.zip" -UseBasicParsing
+    Expand-Archive "$env:TEMP\node22.zip" -DestinationPath "$env:TEMP\node22x" -Force
+    $inner = (Get-ChildItem "$env:TEMP\node22x" -Directory | Select-Object -First 1).FullName
+    Move-Item $inner "$DIR\node22" -Force
+  }
+  $nodeBin = "$DIR\node22\node.exe"
 }
+Write-Host "[bootstrap] node: $((& $nodeBin -v) 2>$null)"
 
+# ── 执行包 ──
 if (-not (Test-Path "$DIR\sciai-worker.mjs")) {
   Write-Host '[bootstrap] 下载执行包…'
-  New-Item -ItemType Directory -Force -Path $DIR | Out-Null
   Invoke-WebRequest -Uri $KIT -OutFile "$env:TEMP\sciai-kit.tgz" -UseBasicParsing
   tar -xzf "$env:TEMP\sciai-kit.tgz" -C $DIR --strip-components=1
 }
@@ -27,21 +41,41 @@ New-Item -ItemType Directory -Force -Path $WS_ROOT | Out-Null
 $bat = @(
   '@echo off',
   "cd /d $DIR",
+  ":loop",
   "set WORKER_NAME=$NAME",
   "set CLAWSGO_API_URL=$API",
   "set CLAWSGO_DEVICE_TOKEN=$TOKEN",
   "set CLAWSGO_WORKSPACE_ROOT=$WS_ROOT",
-  "node `"$DIR\sciai-worker.mjs`" >> `"$DIR\worker.log`" 2>&1"
+  "set SCIAI_KIT_BASE=$KB",
+  "`"$nodeBin`" `"$DIR\sciai-worker.mjs`" >> `"$DIR\worker.log`" 2>&1",
+  "echo [%date% %time%] watchdog: worker exited, restart in 5s >> `"$DIR\worker.log`"",
+  'timeout /t 5 /nobreak >nul',
+  'goto loop'
 ) -join "`r`n"
 Set-Content -Path "$DIR\start-worker.bat" -Value $bat -Encoding ASCII
 
 schtasks /create /tn SCAIWorker /tr "$DIR\start-worker.bat" /sc onstart /ru SYSTEM /f | Out-Null
 schtasks /run /tn SCAIWorker | Out-Null
 Start-Sleep -Seconds 6
-Write-Host "[bootstrap] 设备 $NAME 已启动（计划任务常驻，开机自启）"
+Write-Host "[bootstrap] 设备 $NAME 已启动（计划任务常驻 + 守护循环，开机自启）"
 try {
   $h = Invoke-RestMethod -Uri "$API/health" -TimeoutSec 8
   if ($h.devices.name -contains $NAME) { Write-Host "  OK: CD5 设备池已看到 $NAME" }
-  else { Write-Host '  等几秒后验证：iwr ' + "$API/health" }
+  else { Write-Host "  稍后验证：iwr $API/health" }
 } catch { Write-Host "  验证失败：$_" }
 Write-Host "[bootstrap] 日志：Get-Content $DIR\worker.log -Tail 20 -Wait"
+
+# ── 可选：加入 Headscale SSH 维护网（HEADSCALE_JOIN=1 时执行；会将 tailscale 切到自建控制面）──
+if ($env:HEADSCALE_JOIN -eq '1') {
+  if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
+    Write-Host '[bootstrap] 安装 Tailscale（16MB msi）…'
+    Invoke-WebRequest -Uri "$KB/tailscale-setup.msi" -OutFile "$env:TEMP\ts.msi" -UseBasicParsing
+    msiexec /i "$env:TEMP\ts.msi" /quiet /norestart | Out-Null
+    Start-Sleep -Seconds 20
+  }
+  $hsKey = if ($env:HEADSCALE_AUTHKEY) { $env:HEADSCALE_AUTHKEY } else { 'hskey-auth-Kt0GHS7uPusz-y7IDGoIg8UWfc5N74Pujn2sdy4SkmVJCqqaQz1W2Tkp5otlPpnBd42GGWzN3lbbv' }
+  Write-Host '[bootstrap] 加入 Headscale SSH 维护网…'
+  & tailscale up --login-server=https://oneyear.tailf48612.ts.net:8443 --auth-key=$hsKey --ssh --hostname=$($env:COMPUTERNAME.ToLower()) --accept-dns=false --timeout=3m
+  Start-Sleep -Seconds 3
+  & tailscale status
+}
